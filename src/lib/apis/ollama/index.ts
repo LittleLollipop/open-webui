@@ -307,7 +307,7 @@ export const generateChatCompletion = (token: string = '', body: object) => new 
 		},
 		body: JSON.stringify(body)
 	}).then(resp => {
-		resolve(resp)
+		resolve([resp, controller])
 	}) .catch((err) => {
 		reject(err)
 	});
