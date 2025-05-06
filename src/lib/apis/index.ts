@@ -1,6 +1,15 @@
 import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
+import { convertOpenApiToToolPayload } from '$lib/utils';
+import { getOpenAIModelsDirect } from './openai';
 
-export const getModels = async (token: string = '', base: boolean = false) => {
+import { parse } from 'yaml';
+import { toast } from 'svelte-sonner';
+
+export const getModels = async (
+	token: string = '',
+	connections: object | null = null,
+	base: boolean = false
+) => {
 	let error = null;
 	const res = await fetch(`${WEBUI_BASE_URL}/api/models${base ? '/base' : ''}`, {
 		method: 'GET',
@@ -25,6 +34,118 @@ export const getModels = async (token: string = '', base: boolean = false) => {
 	}
 
 	let models = res?.data ?? [];
+
+	if (connections && !base) {
+		let localModels = [];
+
+		if (connections) {
+			const OPENAI_API_BASE_URLS = connections.OPENAI_API_BASE_URLS;
+			const OPENAI_API_KEYS = connections.OPENAI_API_KEYS;
+			const OPENAI_API_CONFIGS = connections.OPENAI_API_CONFIGS;
+
+			const requests = [];
+			for (const idx in OPENAI_API_BASE_URLS) {
+				const url = OPENAI_API_BASE_URLS[idx];
+
+				if (idx.toString() in OPENAI_API_CONFIGS) {
+					const apiConfig = OPENAI_API_CONFIGS[idx.toString()] ?? {};
+
+					const enable = apiConfig?.enable ?? true;
+					const modelIds = apiConfig?.model_ids ?? [];
+
+					if (enable) {
+						if (modelIds.length > 0) {
+							const modelList = {
+								object: 'list',
+								data: modelIds.map((modelId) => ({
+									id: modelId,
+									name: modelId,
+									owned_by: 'openai',
+									openai: { id: modelId },
+									urlIdx: idx
+								}))
+							};
+
+							requests.push(
+								(async () => {
+									return modelList;
+								})()
+							);
+						} else {
+							requests.push(
+								(async () => {
+									return await getOpenAIModelsDirect(url, OPENAI_API_KEYS[idx])
+										.then((res) => {
+											return res;
+										})
+										.catch((err) => {
+											return {
+												object: 'list',
+												data: [],
+												urlIdx: idx
+											};
+										});
+								})()
+							);
+						}
+					} else {
+						requests.push(
+							(async () => {
+								return {
+									object: 'list',
+									data: [],
+									urlIdx: idx
+								};
+							})()
+						);
+					}
+				}
+			}
+
+			const responses = await Promise.all(requests);
+
+			for (const idx in responses) {
+				const response = responses[idx];
+				const apiConfig = OPENAI_API_CONFIGS[idx.toString()] ?? {};
+
+				let models = Array.isArray(response) ? response : (response?.data ?? []);
+				models = models.map((model) => ({ ...model, openai: { id: model.id }, urlIdx: idx }));
+
+				const prefixId = apiConfig.prefix_id;
+				if (prefixId) {
+					for (const model of models) {
+						model.id = `${prefixId}.${model.id}`;
+					}
+				}
+
+				const tags = apiConfig.tags;
+				if (tags) {
+					for (const model of models) {
+						model.tags = tags;
+					}
+				}
+
+				localModels = localModels.concat(models);
+			}
+		}
+
+		models = models.concat(
+			localModels.map((model) => ({
+				...model,
+				name: model?.name ?? model?.id,
+				direct: true
+			}))
+		);
+
+		// Remove duplicates
+		const modelsMap = {};
+		for (const model of models) {
+			modelsMap[model.id] = model;
+		}
+
+		models = Object.values(modelsMap);
+	}
+
 	return models;
 };
 
@@ -107,10 +228,257 @@ export const chatAction = async (token: string, action_id: string, body: ChatAct
 	return res;
 };
 
+export const stopTask = async (token: string, id: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_BASE_URL}/api/tasks/stop/${id}`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.log(err);
+			if ('detail' in err) {
+				error = err.detail;
+			} else {
+				error = err;
+			}
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getTaskIdsByChatId = async (token: string, chat_id: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_BASE_URL}/api/tasks/chat/${chat_id}`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.log(err);
+			if ('detail' in err) {
+				error = err.detail;
+			} else {
+				error = err;
+			}
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const getToolServerData = async (token: string, url: string) => {
+	let error = null;
+
+	const res = await fetch(`${url}`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		}
+	})
+		.then(async (res) => {
+			// Check if URL ends with .yaml or .yml to determine format
+			if (url.toLowerCase().endsWith('.yaml') || url.toLowerCase().endsWith('.yml')) {
+				if (!res.ok) throw await res.text();
+				const text = await res.text();
+				return parse(text);
+			} else {
+				if (!res.ok) throw await res.json();
+				return res.json();
+			}
+		})
+		.catch((err) => {
+			console.log(err);
+			if ('detail' in err) {
+				error = err.detail;
+			} else {
+				error = err;
+			}
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	const data = {
+		openapi: res,
+		info: res.info,
+		specs: convertOpenApiToToolPayload(res)
+	};
+
+	console.log(data);
+	return data;
+};
+
+export const getToolServersData = async (i18n, servers: object[]) => {
+	return (
+		await Promise.all(
+			servers
+				.filter((server) => server?.config?.enable)
+				.map(async (server) => {
+					const data = await getToolServerData(
+						(server?.auth_type ?? 'bearer') === 'bearer' ? server?.key : localStorage.token,
+						server?.url + '/' + (server?.path ?? 'openapi.json')
+					).catch((err) => {
+						toast.error(
+							i18n.t(`Failed to connect to {{URL}} OpenAPI tool server`, {
+								URL: server?.url + '/' + (server?.path ?? 'openapi.json')
+							})
+						);
+						return null;
+					});
+
+					if (data) {
+						const { openapi, info, specs } = data;
+						return {
+							url: server?.url,
+							openapi: openapi,
+							info: info,
+							specs: specs
+						};
+					}
+				})
+		)
+	).filter((server) => server);
+};
+
+export const executeToolServer = async (
+	token: string,
+	url: string,
+	name: string,
+	params: Record<string, any>,
+	serverData: { openapi: any; info: any; specs: any }
+) => {
+	let error = null;
+
+	try {
+		// Find the matching operationId in the OpenAPI spec
+		const matchingRoute = Object.entries(serverData.openapi.paths).find(([_, methods]) =>
+			Object.entries(methods as any).some(([__, operation]: any) => operation.operationId === name)
+		);
+
+		if (!matchingRoute) {
+			throw new Error(`No matching route found for operationId: ${name}`);
+		}
+
+		const [routePath, methods] = matchingRoute;
+
+		const methodEntry = Object.entries(methods as any).find(
+			([_, operation]: any) => operation.operationId === name
+		);
+
+		if (!methodEntry) {
+			throw new Error(`No matching method found for operationId: ${name}`);
+		}
+
+		const [httpMethod, operation]: [string, any] = methodEntry;
+
+		// Split parameters by type
+		const pathParams: Record<string, any> = {};
+		const queryParams: Record<string, any> = {};
+		let bodyParams: any = {};
+
+		if (operation.parameters) {
+			operation.parameters.forEach((param: any) => {
+				const paramName = param.name;
+				const paramIn = param.in;
+				if (params.hasOwnProperty(paramName)) {
+					if (paramIn === 'path') {
+						pathParams[paramName] = params[paramName];
+					} else if (paramIn === 'query') {
+						queryParams[paramName] = params[paramName];
+					}
+				}
+			});
+		}
+
+		let finalUrl = `${url}${routePath}`;
+
+		// Replace path parameters (`{param}`)
+		Object.entries(pathParams).forEach(([key, value]) => {
+			finalUrl = finalUrl.replace(new RegExp(`{${key}}`, 'g'), encodeURIComponent(value));
+		});
+
+		// Append query parameters to URL if any
+		if (Object.keys(queryParams).length > 0) {
+			const queryString = new URLSearchParams(
+				Object.entries(queryParams).map(([k, v]) => [k, String(v)])
+			).toString();
+			finalUrl += `?${queryString}`;
+		}
+
+		// Handle requestBody composite
+		if (operation.requestBody && operation.requestBody.content) {
+			const contentType = Object.keys(operation.requestBody.content)[0];
+			if (params !== undefined) {
+				bodyParams = params;
+			} else {
+				// Optional: Fallback or explicit error if body is expected but not provided
+				throw new Error(`Request body expected for operation '${name}' but none found.`);
+			}
+		}
+
+		// Prepare headers and request options
+		const headers: Record<string, string> = {
+			'Content-Type': 'application/json',
+			...(token && { authorization: `Bearer ${token}` })
+		};
+
+		let requestOptions: RequestInit = {
+			method: httpMethod.toUpperCase(),
+			headers
+		};
+
+		if (['post', 'put', 'patch'].includes(httpMethod.toLowerCase()) && operation.requestBody) {
+			requestOptions.body = JSON.stringify(bodyParams);
+		}
+
+		const res = await fetch(finalUrl, requestOptions);
+		if (!res.ok) {
+			const resText = await res.text();
+			throw new Error(`HTTP error! Status: ${res.status}. Message: ${resText}`);
+		}
+
+		return await res.json();
+	} catch (err: any) {
+		error = err.message;
+		console.error('API Request Error:', error);
+		return { error };
+	}
+};
+
 export const getTaskConfig = async (token: string = '') => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/config`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/config`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -138,7 +506,7 @@ export const getTaskConfig = async (token: string = '') => {
 export const updateTaskConfig = async (token: string, config: object) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/config/update`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/config/update`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -171,12 +539,12 @@ export const updateTaskConfig = async (token: string, config: object) => {
 export const generateTitle = async (
 	token: string = '',
 	model: string,
-	messages: string[],
+	messages: object[],
 	chat_id?: string
 ) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/title/completions`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/title/completions`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -205,7 +573,39 @@ export const generateTitle = async (
 		throw error;
 	}
 
-	return res?.choices[0]?.message?.content.replace(/["']/g, '') ?? 'New Chat';
+	try {
+		// Step 1: Safely extract the response string
+		const response = res?.choices[0]?.message?.content ?? '';
+
+		// Step 2: Attempt to fix common JSON format issues like single quotes
+		const sanitizedResponse = response.replace(/['‘’`]/g, '"'); // Convert single quotes to double quotes for valid JSON
+
+		// Step 3: Find the relevant JSON block within the response
+		const jsonStartIndex = sanitizedResponse.indexOf('{');
+		const jsonEndIndex = sanitizedResponse.lastIndexOf('}');
+
+		// Step 4: Check if we found a valid JSON block (with both `{` and `}`)
+		if (jsonStartIndex !== -1 && jsonEndIndex !== -1) {
+			const jsonResponse = sanitizedResponse.substring(jsonStartIndex, jsonEndIndex + 1);
+
+			// Step 5: Parse the JSON block
+			const parsed = JSON.parse(jsonResponse);
+
+			// Step 6: If there's a "tags" key, return the tags array; otherwise, return an empty array
+			if (parsed && parsed.title) {
+				return parsed.title;
+			} else {
+				return null;
+			}
+		}
+
+		// If no valid JSON block found, return an empty array
+		return null;
+	} catch (e) {
+		// Catch and safely return empty array on any parsing errors
+		console.error('Failed to parse response: ', e);
+		return null;
+	}
 };
 
 export const generateTags = async (
@@ -216,7 +616,7 @@ export const generateTags = async (
 ) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/tags/completions`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/tags/completions`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -288,7 +688,7 @@ export const generateEmoji = async (
 ) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/emoji/completions`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/emoji/completions`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -337,7 +737,7 @@ export const generateQueries = async (
 ) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/queries/completions`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/queries/completions`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -407,7 +807,7 @@ export const generateAutoCompletion = async (
 	const controller = new AbortController();
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/auto/completions`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/auto/completions`, {
 		signal: controller.signal,
 		method: 'POST',
 		headers: {
@@ -477,7 +877,7 @@ export const generateMoACompletion = async (
 	const controller = new AbortController();
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/task/moa/completions`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/moa/completions`, {
 		signal: controller.signal,
 		method: 'POST',
 		headers: {
@@ -507,7 +907,7 @@ export const generateMoACompletion = async (
 export const getPipelinesList = async (token: string = '') => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/pipelines/list`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/pipelines/list`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -541,7 +941,7 @@ export const uploadPipeline = async (token: string, file: File, urlIdx: string) 
 	formData.append('file', file);
 	formData.append('urlIdx', urlIdx);
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/pipelines/upload`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/pipelines/upload`, {
 		method: 'POST',
 		headers: {
 			...(token && { authorization: `Bearer ${token}` })
@@ -573,7 +973,7 @@ export const uploadPipeline = async (token: string, file: File, urlIdx: string) 
 export const downloadPipeline = async (token: string, url: string, urlIdx: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/pipelines/add`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/pipelines/add`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',
@@ -609,7 +1009,7 @@ export const downloadPipeline = async (token: string, url: string, urlIdx: strin
 export const deletePipeline = async (token: string, id: string, urlIdx: string) => {
 	let error = null;
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/pipelines/delete`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/pipelines/delete`, {
 		method: 'DELETE',
 		headers: {
 			Accept: 'application/json',
@@ -650,7 +1050,7 @@ export const getPipelines = async (token: string, urlIdx?: string) => {
 		searchParams.append('urlIdx', urlIdx);
 	}
 
-	const res = await fetch(`${WEBUI_BASE_URL}/api/pipelines?${searchParams.toString()}`, {
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/pipelines/?${searchParams.toString()}`, {
 		method: 'GET',
 		headers: {
 			Accept: 'application/json',
@@ -685,7 +1085,7 @@ export const getPipelineValves = async (token: string, pipeline_id: string, urlI
 	}
 
 	const res = await fetch(
-		`${WEBUI_BASE_URL}/api/pipelines/${pipeline_id}/valves?${searchParams.toString()}`,
+		`${WEBUI_BASE_URL}/api/v1/pipelines/${pipeline_id}/valves?${searchParams.toString()}`,
 		{
 			method: 'GET',
 			headers: {
@@ -721,7 +1121,7 @@ export const getPipelineValvesSpec = async (token: string, pipeline_id: string, 
 	}
 
 	const res = await fetch(
-		`${WEBUI_BASE_URL}/api/pipelines/${pipeline_id}/valves/spec?${searchParams.toString()}`,
+		`${WEBUI_BASE_URL}/api/v1/pipelines/${pipeline_id}/valves/spec?${searchParams.toString()}`,
 		{
 			method: 'GET',
 			headers: {
@@ -762,7 +1162,7 @@ export const updatePipelineValves = async (
 	}
 
 	const res = await fetch(
-		`${WEBUI_BASE_URL}/api/pipelines/${pipeline_id}/valves/update?${searchParams.toString()}`,
+		`${WEBUI_BASE_URL}/api/v1/pipelines/${pipeline_id}/valves/update?${searchParams.toString()}`,
 		{
 			method: 'POST',
 			headers: {
@@ -848,13 +1248,14 @@ export const getChangelog = async () => {
 	return res;
 };
 
-export const getVersionUpdates = async () => {
+export const getVersionUpdates = async (token: string) => {
 	let error = null;
 
 	const res = await fetch(`${WEBUI_BASE_URL}/api/version/updates`, {
 		method: 'GET',
 		headers: {
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
 		}
 	})
 		.then(async (res) => {

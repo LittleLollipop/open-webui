@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { getBackendConfig } from '$lib/apis';
-	import { setDefaultPromptSuggestions } from '$lib/apis/configs';
 	import { config, models, settings, user } from '$lib/stores';
 	import { createEventDispatcher, onMount, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
@@ -30,12 +28,31 @@
 	// Interface
 	let defaultModelId = '';
 	let showUsername = false;
+
+	let notificationSound = true;
+	let notificationSoundAlways = false;
+
+	let detectArtifacts = true;
+
 	let richTextInput = true;
+	let promptAutocomplete = false;
+
 	let largeTextAsFile = false;
 
 	let landingPageMode = '';
 	let chatBubble = true;
-	let chatDirection: 'LTR' | 'RTL' = 'LTR';
+	let chatDirection: 'LTR' | 'RTL' | 'auto' = 'auto';
+	let ctrlEnterToSend = false;
+	let copyFormatted = false;
+
+	let collapseCodeBlocks = false;
+	let expandDetails = false;
+
+	let imageCompression = false;
+	let imageCompressionSize = {
+		width: '',
+		height: ''
+	};
 
 	// Admin - Show Update Available Toast
 	let showUpdateToast = true;
@@ -45,9 +62,29 @@
 	let voiceInterruption = false;
 	let hapticFeedback = false;
 
+	let webSearch = null;
+
+	let iframeSandboxAllowSameOrigin = false;
+	let iframeSandboxAllowForms = false;
+
+	const toggleExpandDetails = () => {
+		expandDetails = !expandDetails;
+		saveSettings({ expandDetails });
+	};
+
+	const toggleCollapseCodeBlocks = () => {
+		collapseCodeBlocks = !collapseCodeBlocks;
+		saveSettings({ collapseCodeBlocks });
+	};
+
 	const toggleSplitLargeChunks = async () => {
 		splitLargeChunks = !splitLargeChunks;
 		saveSettings({ splitLargeChunks: splitLargeChunks });
+	};
+
+	const togglePromptAutocomplete = async () => {
+		promptAutocomplete = !promptAutocomplete;
+		saveSettings({ promptAutocomplete: promptAutocomplete });
 	};
 
 	const togglesScrollOnBranchChange = async () => {
@@ -75,6 +112,16 @@
 		saveSettings({ showUpdateToast: showUpdateToast });
 	};
 
+	const toggleNotificationSound = async () => {
+		notificationSound = !notificationSound;
+		saveSettings({ notificationSound: notificationSound });
+	};
+
+	const toggleNotificationSoundAlways = async () => {
+		notificationSoundAlways = !notificationSoundAlways;
+		saveSettings({ notificationSoundAlways: notificationSoundAlways });
+	};
+
 	const toggleShowChangelog = async () => {
 		showChangelog = !showChangelog;
 		saveSettings({ showChangelog: showChangelog });
@@ -93,6 +140,11 @@
 	const toggleVoiceInterruption = async () => {
 		voiceInterruption = !voiceInterruption;
 		saveSettings({ voiceInterruption: voiceInterruption });
+	};
+
+	const toggleImageCompression = async () => {
+		imageCompression = !imageCompression;
+		saveSettings({ imageCompression });
 	};
 
 	const toggleHapticFeedback = async () => {
@@ -135,6 +187,11 @@
 		saveSettings({ autoTags });
 	};
 
+	const toggleDetectArtifacts = async () => {
+		detectArtifacts = !detectArtifacts;
+		saveSettings({ detectArtifacts });
+	};
+
 	const toggleRichTextInput = async () => {
 		richTextInput = !richTextInput;
 		saveSettings({ richTextInput });
@@ -169,21 +226,54 @@
 		}
 	};
 
+	const toggleCopyFormatted = async () => {
+		copyFormatted = !copyFormatted;
+		saveSettings({ copyFormatted });
+	};
+
 	const toggleChangeChatDirection = async () => {
-		chatDirection = chatDirection === 'LTR' ? 'RTL' : 'LTR';
+		if (chatDirection === 'auto') {
+			chatDirection = 'LTR';
+		} else if (chatDirection === 'LTR') {
+			chatDirection = 'RTL';
+		} else if (chatDirection === 'RTL') {
+			chatDirection = 'auto';
+		}
 		saveSettings({ chatDirection });
+	};
+
+	const togglectrlEnterToSend = async () => {
+		ctrlEnterToSend = !ctrlEnterToSend;
+		saveSettings({ ctrlEnterToSend });
 	};
 
 	const updateInterfaceHandler = async () => {
 		saveSettings({
-			models: [defaultModelId]
+			models: [defaultModelId],
+			imageCompressionSize: imageCompressionSize
 		});
+	};
+
+	const toggleWebSearch = async () => {
+		webSearch = webSearch === null ? 'always' : null;
+		saveSettings({ webSearch: webSearch });
+	};
+
+	const toggleIframeSandboxAllowSameOrigin = async () => {
+		iframeSandboxAllowSameOrigin = !iframeSandboxAllowSameOrigin;
+		saveSettings({ iframeSandboxAllowSameOrigin });
+	};
+
+	const toggleIframeSandboxAllowForms = async () => {
+		iframeSandboxAllowForms = !iframeSandboxAllowForms;
+		saveSettings({ iframeSandboxAllowForms });
 	};
 
 	onMount(async () => {
 		titleAutoGenerate = $settings?.title?.auto ?? true;
 		autoTags = $settings.autoTags ?? true;
 
+		detectArtifacts = $settings.detectArtifacts ?? true;
 		responseAutoCopy = $settings.responseAutoCopy ?? false;
 
 		showUsername = $settings.showUsername ?? false;
@@ -194,17 +284,29 @@
 		voiceInterruption = $settings.voiceInterruption ?? false;
 
 		richTextInput = $settings.richTextInput ?? true;
+		promptAutocomplete = $settings.promptAutocomplete ?? false;
 		largeTextAsFile = $settings.largeTextAsFile ?? false;
+		copyFormatted = $settings.copyFormatted ?? false;
+
+		collapseCodeBlocks = $settings.collapseCodeBlocks ?? false;
+		expandDetails = $settings.expandDetails ?? false;
 
 		landingPageMode = $settings.landingPageMode ?? '';
 		chatBubble = $settings.chatBubble ?? true;
 		widescreenMode = $settings.widescreenMode ?? false;
 		splitLargeChunks = $settings.splitLargeChunks ?? false;
 		scrollOnBranchChange = $settings.scrollOnBranchChange ?? true;
-		chatDirection = $settings.chatDirection ?? 'LTR';
+		chatDirection = $settings.chatDirection ?? 'auto';
 		userLocation = $settings.userLocation ?? false;
 
+		notificationSound = $settings?.notificationSound ?? true;
+		notificationSoundAlways = $settings?.notificationSoundAlways ?? false;
+
 		hapticFeedback = $settings.hapticFeedback ?? false;
+		ctrlEnterToSend = $settings.ctrlEnterToSend ?? false;
+
+		imageCompression = $settings.imageCompression ?? false;
+		imageCompressionSize = $settings.imageCompressionSize ?? { width: '', height: '' };
 
 		defaultModelId = $settings?.models?.at(0) ?? '';
 		if ($config?.default_models) {
@@ -212,6 +314,7 @@
 		}
 
 		backgroundImageUrl = $settings.backgroundImageUrl ?? null;
+		webSearch = $settings.webSearch ?? null;
 	});
 </script>
 
@@ -259,7 +362,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Landing Page Mode')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleLandingPageMode();
 						}}
@@ -279,7 +382,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Chat Bubble UI')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleChatBubble();
 						}}
@@ -302,7 +405,7 @@
 						</div>
 
 						<button
-							class="p-1 px-3 text-xs flex rounded transition"
+							class="p-1 px-3 text-xs flex rounded-sm transition"
 							on:click={() => {
 								toggleShowUsername();
 							}}
@@ -323,7 +426,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Widescreen Mode')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleWidescreenMode();
 						}}
@@ -343,20 +446,68 @@
 					<div class=" self-center text-xs">{$i18n.t('Chat direction')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={toggleChangeChatDirection}
 						type="button"
 					>
 						{#if chatDirection === 'LTR'}
 							<span class="ml-2 self-center">{$i18n.t('LTR')}</span>
-						{:else}
+						{:else if chatDirection === 'RTL'}
 							<span class="ml-2 self-center">{$i18n.t('RTL')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Auto')}</span>
 						{/if}
 					</button>
 				</div>
 			</div>
 
-			{#if $user.role === 'admin'}
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">
+						{$i18n.t('Notification Sound')}
+					</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleNotificationSound();
+						}}
+						type="button"
+					>
+						{#if notificationSound === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			{#if notificationSound}
+				<div>
+					<div class=" py-0.5 flex w-full justify-between">
+						<div class=" self-center text-xs">
+							{$i18n.t('Always Play Notification Sound')}
+						</div>
+
+						<button
+							class="p-1 px-3 text-xs flex rounded-sm transition"
+							on:click={() => {
+								toggleNotificationSoundAlways();
+							}}
+							type="button"
+						>
+							{#if notificationSoundAlways === true}
+								<span class="ml-2 self-center">{$i18n.t('On')}</span>
+							{:else}
+								<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+							{/if}
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			{#if $user?.role === 'admin'}
 				<div>
 					<div class=" py-0.5 flex w-full justify-between">
 						<div class=" self-center text-xs">
@@ -364,7 +515,7 @@
 						</div>
 
 						<button
-							class="p-1 px-3 text-xs flex rounded transition"
+							class="p-1 px-3 text-xs flex rounded-sm transition"
 							on:click={() => {
 								toggleShowUpdateToast();
 							}}
@@ -386,7 +537,7 @@
 						</div>
 
 						<button
-							class="p-1 px-3 text-xs flex rounded transition"
+							class="p-1 px-3 text-xs flex rounded-sm transition"
 							on:click={() => {
 								toggleShowChangelog();
 							}}
@@ -409,7 +560,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Title Auto-Generation')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleTitleAutoGenerate();
 						}}
@@ -429,7 +580,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Chat Tags Auto-Generation')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleAutoTags();
 						}}
@@ -447,11 +598,33 @@
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs">
+						{$i18n.t('Detect Artifacts Automatically')}
+					</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleDetectArtifacts();
+						}}
+						type="button"
+					>
+						{#if detectArtifacts === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">
 						{$i18n.t('Auto-Copy Response to Clipboard')}
 					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleResponseAutoCopy();
 						}}
@@ -473,7 +646,7 @@
 					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleRichTextInput();
 						}}
@@ -488,6 +661,30 @@
 				</div>
 			</div>
 
+			{#if $config?.features?.enable_autocomplete_generation && richTextInput}
+				<div>
+					<div class=" py-0.5 flex w-full justify-between">
+						<div class=" self-center text-xs">
+							{$i18n.t('Prompt Autocompletion')}
+						</div>
+
+						<button
+							class="p-1 px-3 text-xs flex rounded-sm transition"
+							on:click={() => {
+								togglePromptAutocomplete();
+							}}
+							type="button"
+						>
+							{#if promptAutocomplete === true}
+								<span class="ml-2 self-center">{$i18n.t('On')}</span>
+							{:else}
+								<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+							{/if}
+						</button>
+					</div>
+				</div>
+			{/if}
+
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs">
@@ -495,7 +692,7 @@
 					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleLargeTextAsFile();
 						}}
@@ -513,11 +710,73 @@
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs">
+						{$i18n.t('Copy Formatted Text')}
+					</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleCopyFormatted();
+						}}
+						type="button"
+					>
+						{#if copyFormatted === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">{$i18n.t('Always Collapse Code Blocks')}</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleCollapseCodeBlocks();
+						}}
+						type="button"
+					>
+						{#if collapseCodeBlocks === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">{$i18n.t('Always Expand Details')}</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleExpandDetails();
+						}}
+						type="button"
+					>
+						{#if expandDetails === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">
 						{$i18n.t('Chat Background Image')}
 					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							if (backgroundImageUrl !== null) {
 								backgroundImageUrl = null;
@@ -542,7 +801,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Allow User Location')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleUserLocation();
 						}}
@@ -559,10 +818,12 @@
 
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">
-					<div class=" self-center text-xs">{$i18n.t('Haptic Feedback')}</div>
+					<div class=" self-center text-xs">
+						{$i18n.t('Haptic Feedback')} ({$i18n.t('Android')})
+					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleHapticFeedback();
 						}}
@@ -577,14 +838,14 @@
 				</div>
 			</div>
 
-			<div>
+			<!-- <div>
 				<div class=" py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs">
 						{$i18n.t('Fluidly stream large external response chunks')}
 					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleSplitLargeChunks();
 						}}
@@ -597,22 +858,104 @@
 						{/if}
 					</button>
 				</div>
+			</div> -->
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">
+						{$i18n.t('Enter Key Behavior')}
+					</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded transition"
+						on:click={() => {
+							togglectrlEnterToSend();
+						}}
+						type="button"
+					>
+						{#if ctrlEnterToSend === true}
+							<span class="ml-2 self-center">{$i18n.t('Ctrl+Enter to Send')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Enter to Send')}</span>
+						{/if}
+					</button>
+				</div>
 			</div>
 
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs">
-						{$i18n.t('Scroll to bottom when switching between branches')}
+						{$i18n.t('Scroll On Branch Change')}
 					</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							togglesScrollOnBranchChange();
 						}}
 						type="button"
 					>
 						{#if scrollOnBranchChange === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">{$i18n.t('Web Search in Chat')}</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleWebSearch();
+						}}
+						type="button"
+					>
+						{#if webSearch === 'always'}
+							<span class="ml-2 self-center">{$i18n.t('Always')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Default')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">{$i18n.t('iframe Sandbox Allow Same Origin')}</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleIframeSandboxAllowSameOrigin();
+						}}
+						type="button"
+					>
+						{#if iframeSandboxAllowSameOrigin === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">{$i18n.t('iframe Sandbox Allow Forms')}</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleIframeSandboxAllowForms();
+						}}
+						type="button"
+					>
+						{#if iframeSandboxAllowForms === true}
 							<span class="ml-2 self-center">{$i18n.t('On')}</span>
 						{:else}
 							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
@@ -628,7 +971,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Allow Voice Interruption in Call')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleVoiceInterruption();
 						}}
@@ -648,7 +991,7 @@
 					<div class=" self-center text-xs">{$i18n.t('Display Emoji in Call')}</div>
 
 					<button
-						class="p-1 px-3 text-xs flex rounded transition"
+						class="p-1 px-3 text-xs flex rounded-sm transition"
 						on:click={() => {
 							toggleEmojiInCall();
 						}}
@@ -662,6 +1005,53 @@
 					</button>
 				</div>
 			</div>
+
+			<div class=" my-1.5 text-sm font-medium">{$i18n.t('File')}</div>
+
+			<div>
+				<div class=" py-0.5 flex w-full justify-between">
+					<div class=" self-center text-xs">{$i18n.t('Image Compression')}</div>
+
+					<button
+						class="p-1 px-3 text-xs flex rounded-sm transition"
+						on:click={() => {
+							toggleImageCompression();
+						}}
+						type="button"
+					>
+						{#if imageCompression === true}
+							<span class="ml-2 self-center">{$i18n.t('On')}</span>
+						{:else}
+							<span class="ml-2 self-center">{$i18n.t('Off')}</span>
+						{/if}
+					</button>
+				</div>
+			</div>
+
+			{#if imageCompression}
+				<div>
+					<div class=" py-0.5 flex w-full justify-between text-xs">
+						<div class=" self-center text-xs">{$i18n.t('Image Max Compression Size')}</div>
+
+						<div>
+							<input
+								bind:value={imageCompressionSize.width}
+								type="number"
+								class="w-20 bg-transparent outline-hidden text-center"
+								min="0"
+								placeholder="Width"
+							/>x
+							<input
+								bind:value={imageCompressionSize.height}
+								type="number"
+								class="w-20 bg-transparent outline-hidden text-center"
+								min="0"
+								placeholder="Height"
+							/>
+						</div>
+					</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 

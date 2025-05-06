@@ -380,12 +380,7 @@ export const generateChatCompletion_old = async (token: string = '', body: objec
 	return [res, controller];
 };
 
-export const createModel = async (
-	token: string,
-	tagName: string,
-	content: string,
-	urlIdx: string | null = null
-) => {
+export const createModel = async (token: string, payload: object, urlIdx: string | null = null) => {
 	let error = null;
 
 	const res = await fetch(
@@ -397,10 +392,7 @@ export const createModel = async (
 				'Content-Type': 'application/json',
 				Authorization: `Bearer ${token}`
 			},
-			body: JSON.stringify({
-				name: tagName,
-				modelfile: content
-			})
+			body: JSON.stringify(payload)
 		}
 	).catch((err) => {
 		error = err;
